@@ -28,8 +28,34 @@
   }
   header, main { width: min(1100px, calc(100% - 32px)); margin: 0 auto; }
   header { padding: 32px 0 4px; }
-  h1 { margin: 0 0 8px; font-size: 28px; font-weight: 680; letter-spacing: 0.01em; }
-  .lead { margin: 0; max-width: 46em; color: var(--muted); }
+  .head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+  h1 { margin: 0; font-size: 28px; font-weight: 680; letter-spacing: 0.01em; }
+  .lamp {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+    padding: 6px 12px 6px 8px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--ink);
+    font-size: 13px;
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .lamp i {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #d23b2f;
+    box-shadow: 0 0 0 3px rgba(210, 59, 47, 0.16);
+  }
+  .lamp[data-state="ready"] i { background: #1f9d55; box-shadow: 0 0 0 3px rgba(31, 157, 85, 0.18); }
+  .lamp[data-state="upload"] i { background: #2f6fed; box-shadow: 0 0 0 3px rgba(47, 111, 237, 0.18); }
+  .lamp[data-state="compute"] i { background: #6d5efc; box-shadow: 0 0 0 3px rgba(109, 94, 252, 0.2); }
+  .lead { margin: 8px 0 0; max-width: 46em; color: var(--muted); }
   .steps {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -204,6 +230,7 @@
   .warn { margin-top: 8px; background: var(--warn-bg); color: var(--warn); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
   .status { min-height: 1.4em; margin: 12px 0 0; }
   .footer-bar { display: flex; justify-content: space-between; gap: 16px; align-items: end; flex-wrap: wrap; }
+  .export-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .name-row { display: flex; align-items: center; gap: 8px; }
   .name-row input { width: min(280px, 100%); }
   @media (max-width: 960px) {
@@ -215,6 +242,8 @@
     header, main { width: min(1100px, calc(100% - 20px)); }
     header { padding: max(16px, env(safe-area-inset-top)) 0 0; }
     h1 { font-size: 22px; }
+    .head-row { align-items: center; }
+    .lamp { margin-top: 0; }
     .steps, .controls, .layout { grid-template-columns: 1fr; }
     .controls .field:last-child { grid-column: auto; }
     .steps { gap: 6px; }
@@ -230,6 +259,8 @@
     #loupe { width: 180px; height: 180px; }
     .footer-bar { align-items: stretch; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
     .footer-bar .primary { width: 100%; min-height: 48px; }
+    .export-actions { width: 100%; }
+    .export-actions button { width: 100%; min-height: 48px; }
     .name-row { width: 100%; }
     #lightbox {
       padding: max(56px, calc(env(safe-area-inset-top) + 48px)) 12px max(16px, env(safe-area-inset-bottom));
@@ -249,8 +280,11 @@
 </head>
 <body>
 <header>
-  <h1>开会 PPT 整理</h1>
-  <p class="lead">把会场里拍斜的幻灯片照片，裁成正面的一页页，再合成一个 PDF。人挡住的角可以手动改。</p>
+  <div class="head-row">
+    <h1>开会 PPT 整理</h1>
+    <div class="lamp" id="lamp" data-state="load"><i></i><span id="lamp-text">正在加载计算脚本</span></div>
+  </div>
+  <p class="lead">把会场里拍斜的幻灯片照片，裁成正面的一页页，再合成一个 PDF。识别和生成都在这台设备上完成，照片不会上传。页面加载完成后，断网也可以继续处理。</p>
   <ol class="steps">
     <li><b>1. 放入照片</b><span>一次可以放很多张，顺序就是 PDF 页序。</span></li>
     <li><b>2. 核对红框</b><span>红框里的内容会留下。拖圆点贴住幻灯片的四条边。</span></li>
@@ -306,7 +340,10 @@
       <span class="name-row"><input id="pdf-name" type="text" value="会议PPT" maxlength="80" aria-label="PDF 文件名"><span>.pdf</span></span>
       <span class="help" id="count"></span>
     </label>
-    <button class="primary" id="export" type="button">下载 PDF</button>
+    <div class="export-actions">
+      <button class="primary" id="export" type="button">下载 PDF</button>
+      <button type="button" id="clear">一键删除所有照片</button>
+    </div>
   </section>
 </main>
 <div id="busy" hidden>
@@ -327,568 +364,10 @@
     </div>
   </div>
 </div>
-<script>
-const state = { session: null, pages: [] };
-const PAD_SPAN = 0.06;
-const $ = (id) => document.getElementById(id);
+<script src="vendor/opencv.js"></script>
+<script src="vendor/libheif.js"></script>
+<script src="detect.js"></script>
+<script src="app.js"></script>
 
-function padRatio() {
-  return (Number($("pad").value) - 50) / 50 * PAD_SPAN;
-}
-
-function padText() {
-  const slider = Number($("pad").value);
-  if (slider === 50) return "50% · 标准";
-  const amount = Math.abs(padRatio() * 100).toFixed(1).replace(/\.0$/, "");
-  return slider < 50 ? `${slider}% · 收紧 ${amount}%` : `${slider}% · 放宽 ${amount}%`;
-}
-
-function settings() {
-  return {
-    aspect: $("aspect").value,
-    width: Number($("width").value),
-    pad: padRatio(),
-  };
-}
-
-function pdfName() {
-  const raw = $("pdf-name").value.trim().replace(/[\\/:*?"<>|]/g, "").replace(/\.pdf$/i, "").trim();
-  return `${raw || "会议PPT"}.pdf`;
-}
-
-let padTimer = 0;
-$("pad").addEventListener("input", () => {
-  $("pad-label").textContent = padText();
-  clearTimeout(padTimer);
-  padTimer = setTimeout(refreshAllPreviews, 180);
-});
-$("aspect").addEventListener("change", refreshAllPreviews);
-$("width").addEventListener("change", refreshAllPreviews);
-
-const drop = $("drop");
-drop.addEventListener("dragover", (ev) => { ev.preventDefault(); drop.classList.add("over"); });
-drop.addEventListener("dragleave", () => drop.classList.remove("over"));
-drop.addEventListener("drop", (ev) => {
-  ev.preventDefault();
-  drop.classList.remove("over");
-  upload(ev.dataTransfer.files);
-});
-$("pick").addEventListener("click", () => $("file").click());
-$("file").addEventListener("change", () => { upload($("file").files); $("file").value = ""; });
-
-function showBusy(title, detail) {
-  $("busy").hidden = false;
-  $("busy-title").textContent = title;
-  $("busy-detail").textContent = detail || "请稍候，不要关闭页面。";
-}
-function hideBusy() {
-  $("busy").hidden = true;
-}
-
-async function upload(fileList) {
-  const files = [...fileList].filter(Boolean);
-  if (!files.length) return;
-  showBusy(`正在识别 ${files.length} 张照片`, "请稍候，不要关闭页面。");
-  try {
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      showBusy(`正在识别第 ${i + 1} / ${files.length} 张`, file.name);
-      const body = new FormData();
-      if (state.session) body.append("session", state.session);
-      body.append("files", file, file.name);
-      const response = await fetch("/api/upload", { method: "POST", body });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "上传失败");
-      state.session = data.session;
-      state.pages.push(...data.pages);
-    }
-    $("status").textContent = "识别完成。先看每一页的预览，不合适再改红框或松紧。";
-    render();
-  } catch (err) {
-    $("status").textContent = err.message;
-    render();
-  } finally {
-    hideBusy();
-  }
-}
-
-function render() {
-  const list = $("pages");
-  list.innerHTML = "";
-  state.pages.forEach((page, index) => list.appendChild(card(page, index)));
-  $("export-bar").hidden = state.pages.length === 0;
-  $("order-bar").hidden = state.pages.length < 2;
-  $("count").textContent = state.pages.length ? `共 ${state.pages.length} 页，按当前上下顺序装订。` : "";
-}
-
-function card(page, index) {
-  const node = document.createElement("article");
-  node.className = "card";
-  const head = document.createElement("div");
-  head.className = "card-head";
-  const name = document.createElement("div");
-  name.className = "name";
-  name.textContent = `第 ${index + 1} 页 · ${page.name}`;
-  const tools = document.createElement("div");
-  tools.className = "tools";
-  tools.append(
-    action("上移", index === 0, () => move(index, -1)),
-    action("下移", index === state.pages.length - 1, () => move(index, 1)),
-    action("重新识别", false, () => redetect(page)),
-    action("删除", false, () => remove(index)),
-  );
-  head.append(name, tools);
-  const layout = document.createElement("div");
-  layout.className = "layout";
-  const canvas = document.createElement("canvas");
-  const preview = document.createElement("img");
-  preview.className = "result";
-  preview.alt = "拉正后的预览";
-  preview.title = "单击放大检查";
-  preview.addEventListener("click", () => openDetail(page));
-  layout.append(
-    column("原图。拖圆点改角，拖边线中部可平移整条边。", canvas),
-    column("预览。单击图片可放大检查。这就是写进 PDF 的这一页。", preview),
-  );
-  node.append(head, layout);
-  if (page.confidence < 0.35) {
-    const warn = document.createElement("div");
-    warn.className = "warn";
-    warn.textContent = "这张自动识别不太可靠。请把四个圆点分别拖到幻灯片的四个角上，再看右边是否端正。";
-    node.append(warn);
-  }
-  page.previewEl = preview;
-  mountEditor(canvas, page);
-  refreshPreview(page);
-  return node;
-}
-
-function column(caption, child) {
-  const wrap = document.createElement("div");
-  wrap.className = "col";
-  const cap = document.createElement("div");
-  cap.className = "cap";
-  cap.textContent = caption;
-  wrap.append(cap, child);
-  return wrap;
-}
-
-function action(label, disabled, onClick) {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.textContent = label;
-  button.disabled = disabled;
-  button.addEventListener("click", onClick);
-  return button;
-}
-
-function reversePages() {
-  if (state.pages.length < 2) return;
-  state.pages.reverse();
-  render();
-  $("status").textContent = "已翻转全部页面。若相册是新的在前，现在就是按拍摄先后排列。";
-}
-$("reverse").addEventListener("click", reversePages);
-
-function move(index, delta) {
-  const next = index + delta;
-  if (next < 0 || next >= state.pages.length) return;
-  const [item] = state.pages.splice(index, 1);
-  state.pages.splice(next, 0, item);
-  render();
-}
-
-function remove(index) {
-  state.pages.splice(index, 1);
-  render();
-}
-
-async function redetect(page) {
-  showBusy("正在重新识别这一张", page.name);
-  const response = await fetch("/api/redetect", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session: state.session, id: page.id }),
-  });
-  try {
-    const data = await response.json();
-    if (!response.ok) {
-      $("status").textContent = data.error || "识别失败";
-      return;
-    }
-    page.corners = data.corners;
-    page.confidence = data.confidence;
-    $("status").textContent = "";
-    render();
-  } catch (err) {
-    $("status").textContent = err.message;
-  } finally {
-    hideBusy();
-  }
-}
-
-function mountEditor(canvas, page) {
-  const ctx = canvas.getContext("2d");
-  const img = new Image();
-  let drag = null;
-  let lastFull = null;
-  img.onload = () => {
-    canvas.width = img.naturalWidth;
-    canvas.height = img.naturalHeight;
-    draw();
-  };
-  img.src = `/api/image/${state.session}/${page.id}`;
-
-  function displayPoint(corner) {
-    return [corner[0] * canvas.width / page.width, corner[1] * canvas.height / page.height];
-  }
-  function eventToFull(ev) {
-    const rect = canvas.getBoundingClientRect();
-    const x = (ev.clientX - rect.left) * canvas.width / rect.width;
-    const y = (ev.clientY - rect.top) * canvas.height / rect.height;
-    return [x * page.width / canvas.width, y * page.height / canvas.height];
-  }
-  function cssScale() {
-    const rect = canvas.getBoundingClientRect();
-    return rect.width > 0 ? canvas.width / rect.width : 1;
-  }
-  function draw() {
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    const pts = page.corners.map(displayPoint);
-    const px = cssScale();
-    ctx.beginPath();
-    pts.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
-    ctx.closePath();
-    ctx.lineWidth = 2.5 * px;
-    ctx.strokeStyle = "#ff3b30";
-    ctx.stroke();
-    const radius = (window.matchMedia("(pointer: coarse)").matches ? 16 : 11) * px;
-    pts.forEach((p, i) => {
-      const q = pts[(i + 1) % 4];
-      const mx = (p[0] + q[0]) / 2;
-      const my = (p[1] + q[1]) / 2;
-      ctx.save();
-      ctx.translate(mx, my);
-      ctx.rotate(Math.atan2(q[1] - p[1], q[0] - p[0]));
-      ctx.fillStyle = "#fff";
-      ctx.strokeStyle = "#1d4e89";
-      ctx.lineWidth = 2 * px;
-      ctx.fillRect(-16 * px, -5 * px, 32 * px, 10 * px);
-      ctx.strokeRect(-16 * px, -5 * px, 32 * px, 10 * px);
-      ctx.restore();
-    });
-    pts.forEach((p) => {
-      ctx.beginPath();
-      ctx.arc(p[0], p[1], radius, 0, Math.PI * 2);
-      ctx.fillStyle = "#fff";
-      ctx.fill();
-      ctx.lineWidth = Math.max(2, radius / 4);
-      ctx.strokeStyle = "#1d4e89";
-      ctx.stroke();
-    });
-  }
-  function clampPoint(x, y) {
-    return [
-      Math.min(page.width * 1.05, Math.max(-page.width * 0.05, x)),
-      Math.min(page.height * 1.05, Math.max(-page.height * 0.05, y)),
-    ];
-  }
-  function updateLoupe(ev, point) {
-    if (!img.complete || !drag) return;
-    const loupe = ensureLoupe();
-    const zoom = 3.2;
-    const ctxL = loupe.canvas.getContext("2d");
-    const size = loupe.canvas.width;
-    const src = size / zoom;
-    const iw = img.naturalWidth;
-    const ih = img.naturalHeight;
-    let sx = point[0] - src / 2;
-    let sy = point[1] - src / 2;
-    let sw = src;
-    let sh = src;
-    let dx = 0;
-    let dy = 0;
-    let dw = size;
-    let dh = size;
-    if (sx < 0) {
-      dx += -sx / src * size;
-      dw -= -sx / src * size;
-      sw += sx;
-      sx = 0;
-    }
-    if (sy < 0) {
-      dy += -sy / src * size;
-      dh -= -sy / src * size;
-      sh += sy;
-      sy = 0;
-    }
-    if (sx + sw > iw) {
-      const over = sx + sw - iw;
-      dw -= over / src * size;
-      sw -= over;
-    }
-    if (sy + sh > ih) {
-      const over = sy + sh - ih;
-      dh -= over / src * size;
-      sh -= over;
-    }
-    ctxL.fillStyle = "#111";
-    ctxL.fillRect(0, 0, size, size);
-    if (sw > 1 && sh > 1 && dw > 1 && dh > 1) {
-      ctxL.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
-    }
-    const cx = sw > 1 ? dx + (point[0] - sx) / sw * dw : size / 2;
-    const cy = sh > 1 ? dy + (point[1] - sy) / sh * dh : size / 2;
-    ctxL.strokeStyle = "#ff3b30";
-    ctxL.lineWidth = 3;
-    ctxL.beginPath();
-    ctxL.moveTo(cx - 22, cy);
-    ctxL.lineTo(cx + 22, cy);
-    ctxL.moveTo(cx, cy - 22);
-    ctxL.lineTo(cx, cy + 22);
-    ctxL.stroke();
-    loupe.hidden = false;
-    const box = loupe.offsetWidth || 156;
-    const gap = 28;
-    let left = ev.clientX - box / 2;
-    let top = ev.clientY - box - gap - 36;
-    if (top < 8) top = Math.min(window.innerHeight - box - 8, ev.clientY + gap + 48);
-    left = Math.max(8, Math.min(left, window.innerWidth - box - 8));
-    loupe.style.left = `${left}px`;
-    loupe.style.top = `${top}px`;
-  }
-  canvas.addEventListener("pointerdown", (ev) => {
-    const [x, y] = eventToFull(ev);
-    const rect = canvas.getBoundingClientRect();
-    const finger = window.matchMedia("(pointer: coarse)").matches ? 36 : 22;
-    const limit = finger * page.width / Math.max(rect.width, 1);
-    let best = -1;
-    let bestDist = limit;
-    page.corners.forEach((corner, i) => {
-      const dist = Math.hypot(corner[0] - x, corner[1] - y);
-      if (dist < bestDist) { best = i; bestDist = dist; }
-    });
-    let edge = -1;
-    if (best < 0) {
-      let edgeDist = limit;
-      for (let i = 0; i < 4; i++) {
-        const a = page.corners[i];
-        const b = page.corners[(i + 1) % 4];
-        const dx = b[0] - a[0];
-        const dy = b[1] - a[1];
-        const len2 = dx * dx + dy * dy || 1;
-        let t = ((x - a[0]) * dx + (y - a[1]) * dy) / len2;
-        t = Math.max(0, Math.min(1, t));
-        const dist = Math.hypot(x - (a[0] + t * dx), y - (a[1] + t * dy));
-        if (dist < edgeDist && t > 0.12 && t < 0.88) {
-          edge = i;
-          edgeDist = dist;
-        }
-      }
-    }
-    if (best < 0 && edge < 0) return;
-    drag = best >= 0 ? { kind: "corner", index: best } : { kind: "edge", index: edge };
-    lastFull = [x, y];
-    canvas.setPointerCapture(ev.pointerId);
-    const focus = drag.kind === "corner" ? page.corners[drag.index] : [x, y];
-    updateLoupe(ev, [focus[0] * canvas.width / page.width, focus[1] * canvas.height / page.height]);
-  });
-  canvas.addEventListener("pointermove", (ev) => {
-    if (!drag) return;
-    const [x, y] = eventToFull(ev);
-    const dx = x - lastFull[0];
-    const dy = y - lastFull[1];
-    lastFull = [x, y];
-    if (drag.kind === "corner") {
-      page.corners[drag.index] = clampPoint(x, y);
-    } else {
-      const i = drag.index;
-      const j = (i + 1) % 4;
-      page.corners[i] = clampPoint(page.corners[i][0] + dx, page.corners[i][1] + dy);
-      page.corners[j] = clampPoint(page.corners[j][0] + dx, page.corners[j][1] + dy);
-    }
-    draw();
-    const focus = drag.kind === "corner" ? page.corners[drag.index] : [x, y];
-    updateLoupe(ev, [focus[0] * canvas.width / page.width, focus[1] * canvas.height / page.height]);
-  });
-  function endDrag() {
-    if (!drag) return;
-    drag = null;
-    hideLoupe();
-    refreshPreview(page);
-  }
-  canvas.addEventListener("pointerup", endDrag);
-  canvas.addEventListener("pointercancel", endDrag);
-  page.redraw = draw;
-}
-
-async function refreshPreview(page) {
-  const mine = page.token = (page.token || 0) + 1;
-  const response = await fetch("/api/preview", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session: state.session, id: page.id, corners: page.corners, ...settings() }),
-  });
-  if (mine !== page.token) return;
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    $("status").textContent = data.error || "预览失败";
-    return;
-  }
-  const blob = await response.blob();
-  if (page.previewUrl) URL.revokeObjectURL(page.previewUrl);
-  page.previewUrl = URL.createObjectURL(blob);
-  if (page.previewEl) page.previewEl.src = page.previewUrl;
-}
-
-function ensureLoupe() {
-  let el = $("loupe");
-  if (!el) {
-    el = document.createElement("div");
-    el.id = "loupe";
-    el.hidden = true;
-    const canvas = document.createElement("canvas");
-    canvas.width = 360;
-    canvas.height = 360;
-    el.append(canvas);
-    document.body.append(el);
-    el.canvas = canvas;
-  }
-  return el;
-}
-function hideLoupe() {
-  const el = $("loupe");
-  if (el) el.hidden = true;
-}
-
-function refreshAllPreviews() {
-  state.pages.forEach(refreshPreview);
-}
-
-let detailUrl = "";
-function ensureLightbox() {
-  if ($("lightbox")) return;
-  const box = document.createElement("div");
-  box.id = "lightbox";
-  box.hidden = true;
-  const close = document.createElement("button");
-  close.id = "lightbox-close";
-  close.type = "button";
-  close.textContent = "关闭";
-  const caption = document.createElement("p");
-  caption.id = "lightbox-cap";
-  const image = document.createElement("img");
-  image.id = "lightbox-img";
-  image.alt = "放大后的预览";
-  box.append(close, caption, image);
-  document.body.append(box);
-  box.addEventListener("click", (ev) => { if (ev.target === box) closeDetail(); });
-  close.addEventListener("click", closeDetail);
-  document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape" && !$("lightbox").hidden) closeDetail();
-  });
-}
-async function openDetail(page) {
-  ensureLightbox();
-  const box = $("lightbox");
-  box.hidden = false;
-  $("lightbox-cap").textContent = "正在生成大图…";
-  $("lightbox-img").removeAttribute("src");
-  const response = await fetch("/api/preview", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session: state.session, id: page.id, corners: page.corners, detail: true, ...settings() }),
-  });
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    $("lightbox-cap").textContent = data.error || "大图生成失败";
-    return;
-  }
-  const blob = await response.blob();
-  if (detailUrl) URL.revokeObjectURL(detailUrl);
-  detailUrl = URL.createObjectURL(blob);
-  $("lightbox-img").src = detailUrl;
-  $("lightbox-cap").textContent = "单击空白处或按 Esc 关闭";
-}
-function closeDetail() {
-  const box = $("lightbox");
-  if (!box || box.hidden) return;
-  box.hidden = true;
-  $("lightbox-img").removeAttribute("src");
-  if (detailUrl) URL.revokeObjectURL(detailUrl);
-  detailUrl = "";
-}
-
-function discardSession() {
-  if (!state.session) return;
-  const body = new Blob([JSON.stringify({ session: state.session })], { type: "application/json" });
-  navigator.sendBeacon("/api/discard", body);
-  state.session = null;
-  state.pages = [];
-}
-window.addEventListener("resize", () => {
-  state.pages.forEach((page) => page.redraw && page.redraw());
-});
-window.addEventListener("pagehide", discardSession);
-window.addEventListener("pageshow", (ev) => {
-  if (!ev.persisted) return;
-  state.session = null;
-  state.pages = [];
-  render();
-});
-
-$("export").addEventListener("click", async () => {
-  if (!state.pages.length) return;
-  const filename = pdfName();
-  $("export").disabled = true;
-  $("status").textContent = "正在生成 PDF…";
-  try {
-    const response = await fetch("/api/pdf", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        session: state.session,
-        filename,
-        ...settings(),
-        pages: state.pages.map((page) => ({ id: page.id, corners: page.corners })),
-      }),
-    });
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data.error || "导出失败");
-    }
-    const data = await response.json();
-    if (isAppleTouch()) {
-      const link = $("save-pdf-link");
-      link.href = data.url;
-      link.textContent = `下载 ${data.filename}`;
-      $("save-pdf-name").textContent = data.filename;
-      $("save-pdf").hidden = false;
-      $("status").textContent = "PDF 已生成。请点弹出的下载链接。";
-    } else {
-      const link = document.createElement("a");
-      link.href = data.url;
-      link.download = data.filename;
-      document.body.append(link);
-      link.click();
-      link.remove();
-      $("status").textContent = `已开始下载 ${data.filename}`;
-    }
-  } catch (err) {
-    $("status").textContent = err.message;
-  } finally {
-    $("export").disabled = false;
-  }
-});
-
-function isAppleTouch() {
-  const ua = navigator.userAgent;
-  return /iPhone|iPad|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-}
-function closeSavePdf() {
-  $("save-pdf").hidden = true;
-}
-$("save-pdf-close").addEventListener("click", closeSavePdf);
-</script>
 </body>
 </html>
