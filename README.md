@@ -34,7 +34,7 @@ The first load fetches OpenCV and the HEIC decoder, about 15 MB. Refresh after t
 - Tighten or loosen every box together. The middle of the slider is the detected crop. The two ends are about 6% tighter and 6% wider.
 - Choose 16:9, 4:3, 16:10, 3:2, or the detected edge lengths. Output width can be 1280, 1920, or 2560.
 - Click a preview to inspect that page. Reverse the order when a phone album listed the newest photo first.
-- Name the PDF and download it. The default name is `会议PPT.pdf`.
+- Name the export and download either a PDF or a vertically stitched long JPEG image. The default base name is `会议PPT`.
 - Remove every photo at once and start another batch.
 
 A light at the top right shows the state: red while the libraries load, blue while photos are read, purple while a page is being calculated, and green when the page is ready. The switch next to it changes between day and night.

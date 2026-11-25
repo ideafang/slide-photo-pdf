@@ -36,9 +36,17 @@ function settings() {
   };
 }
 
+function baseName() {
+  const raw = $("pdf-name").value.trim().replace(/[\\/:*?"<>|]/g, "").replace(/\.(pdf|jpe?g|png)$/i, "").trim();
+  return raw || "会议PPT";
+}
+
 function pdfName() {
-  const raw = $("pdf-name").value.trim().replace(/[\\/:*?"<>|]/g, "").replace(/\.pdf$/i, "").trim();
-  return `${raw || "会议PPT"}.pdf`;
+  return `${baseName()}.pdf`;
+}
+
+function longImageName() {
+  return `${baseName()}.jpg`;
 }
 
 function showBusy(title, detail) {
@@ -379,7 +387,7 @@ function clearPages() {
   }
   state.pages = [];
   render();
-  $("status").textContent = "已删除全部照片，可以继续放入下一批。";
+  $("status").textContent = "已清空全部照片，可以继续放入下一批。";
 }
 $("clear").addEventListener("click", clearPages);
 
@@ -672,10 +680,76 @@ window.addEventListener("resize", () => {
   state.pages.forEach((page) => page.redraw && page.redraw());
 });
 
+let saveUrl = "";
+function setExportDisabled(disabled) {
+  $("export").disabled = disabled;
+  $("export-long").disabled = disabled;
+  $("clear").disabled = disabled;
+}
+
+function deliverDownload(blob, filename, kind, extraNote) {
+  const url = URL.createObjectURL(blob);
+  if (isAppleTouch()) {
+    if (saveUrl) URL.revokeObjectURL(saveUrl);
+    saveUrl = url;
+    const isImage = kind === "image";
+    $("save-title").textContent = isImage ? "长图已生成" : "PDF 已生成";
+    $("save-pdf-help").textContent = isImage
+      ? "点下面的链接打开或下载。iPhone 若直接显示图片，长按图片即可“存储到照片”。"
+      : "点下面的链接下载。若 Safari 直接打开了预览，再点屏幕下方的分享按钮，选择“存储到文件”。";
+    const link = $("save-pdf-link");
+    link.href = url;
+    link.download = filename;
+    link.textContent = `下载 ${filename}`;
+    $("save-pdf-name").textContent = filename;
+    $("save-pdf").hidden = false;
+    $("status").textContent = `${isImage ? "长图" : "PDF"}已生成。请点弹出的下载链接。${extraNote || ""}`;
+  } else {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    $("status").textContent = `已开始下载 ${filename}${extraNote || ""}`;
+  }
+}
+
+function stitchPages(canvases, maxArea, maxHeight) {
+  const count = canvases.length;
+  const maxW = Math.max(...canvases.map((c) => c.width));
+  const gap = count > 1 ? Math.max(8, Math.round(maxW * 0.012)) : 0;
+  const pad = gap;
+  const rawW = maxW + pad * 2;
+  const rawH = canvases.reduce((sum, c) => sum + c.height, 0) + gap * Math.max(0, count - 1) + pad * 2;
+  let scale = 1;
+  if (rawH > maxHeight) scale = Math.min(scale, maxHeight / rawH);
+  if (rawW * rawH * scale * scale > maxArea) scale = Math.min(scale, Math.sqrt(maxArea / (rawW * rawH)));
+  const outW = Math.max(1, Math.floor(rawW * scale));
+  const outH = Math.max(1, Math.floor(rawH * scale));
+  const out = document.createElement("canvas");
+  out.width = outW;
+  out.height = outH;
+  const ctx = out.getContext("2d");
+  if (!ctx) throw new Error("浏览器画布尺寸受限，无法拼接这么多页");
+  ctx.fillStyle = "#e8e8e8";
+  ctx.fillRect(0, 0, outW, outH);
+  let y = pad * scale;
+  for (const c of canvases) {
+    const dw = c.width * scale;
+    const dh = c.height * scale;
+    const dx = (outW - dw) / 2;
+    ctx.drawImage(c, dx, y, dw, dh);
+    y += dh + gap * scale;
+  }
+  return out;
+}
+
 $("export").addEventListener("click", async () => {
   if (!state.pages.length) return;
   const filename = pdfName();
-  $("export").disabled = true;
+  setExportDisabled(true);
   showBusy("正在生成 PDF", filename);
   setLamp("compute", "正在计算");
   await paintFrame();
@@ -684,37 +758,63 @@ $("export").addEventListener("click", async () => {
     for (let i = 0; i < state.pages.length; i++) {
       const page = state.pages[i];
       showBusy(`正在生成第 ${i + 1} / ${state.pages.length} 页`, page.name);
+      await paintFrame();
       const full = warpCanvas(page, settings().width);
       encoded.push({
         jpeg: await canvasJpeg(full, 0.9),
         width: full.width,
         height: full.height,
       });
+      full.width = full.height = 0;
     }
     const pdf = imagesToPdf(encoded);
     const blob = new Blob([pdf], { type: "application/pdf" });
-    const url = URL.createObjectURL(blob);
-    if (isAppleTouch()) {
-      const link = $("save-pdf-link");
-      link.href = url;
-      link.textContent = `下载 ${filename}`;
-      $("save-pdf-name").textContent = filename;
-      $("save-pdf").hidden = false;
-      $("status").textContent = "PDF 已生成。请点弹出的下载链接。";
-    } else {
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = filename;
-      document.body.append(link);
-      link.click();
-      link.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
-      $("status").textContent = `已开始下载 ${filename}`;
-    }
+    deliverDownload(blob, filename, "pdf");
   } catch (err) {
     $("status").textContent = err.message || String(err);
   } finally {
-    $("export").disabled = false;
+    setExportDisabled(false);
+    hideBusy();
+    if (state.ready) setLamp("ready", "就绪");
+  }
+});
+
+$("export-long").addEventListener("click", async () => {
+  if (!state.pages.length) return;
+  const filename = longImageName();
+  setExportDisabled(true);
+  showBusy("正在拼接长图", filename);
+  setLamp("compute", "正在计算");
+  await paintFrame();
+  const warped = [];
+  let stitched = null;
+  try {
+    const mobile = isAppleTouch();
+    const maxArea = mobile ? 16000000 : 120000000;
+    const maxHeight = mobile ? 16000 : 30000;
+    const estW = Math.floor(Math.sqrt(maxArea / (state.pages.length * 0.62)));
+    const warpW = Math.min(settings().width, Math.max(640, estW));
+    for (let i = 0; i < state.pages.length; i++) {
+      const page = state.pages[i];
+      showBusy(`正在处理第 ${i + 1} / ${state.pages.length} 页`, page.name);
+      await paintFrame();
+      warped.push(warpCanvas(page, warpW));
+    }
+    showBusy("正在拼接并编码长图", filename);
+    await paintFrame();
+    stitched = stitchPages(warped, maxArea, maxHeight);
+    const dims = `${stitched.width}×${stitched.height}`;
+    for (const c of warped) c.width = c.height = 0;
+    warped.length = 0;
+    const blob = await new Promise((resolve) => stitched.toBlob(resolve, "image/jpeg", 0.9));
+    if (!blob) throw new Error("长图编码失败，请尝试降低清晰度或减少页数");
+    deliverDownload(blob, filename, "image", `（${dims}）`);
+  } catch (err) {
+    $("status").textContent = err.message || String(err);
+  } finally {
+    for (const c of warped) c.width = c.height = 0;
+    if (stitched) stitched.width = stitched.height = 0;
+    setExportDisabled(false);
     hideBusy();
     if (state.ready) setLamp("ready", "就绪");
   }
