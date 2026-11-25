@@ -2,15 +2,32 @@
 
 # slide-photo-pdf
 
-Turn photos of a projected slide into frontal pages, then join them into one PDF. The page runs entirely in your browser. Photos are not uploaded.
+Automatically detect, rectify, and export angled conference slide photos into a clean **PDF** or a **vertically stitched long image** — running **100% locally in your browser**.
 
-You usually take these pictures from a seat. The screen is skewed, and a speaker or the podium may cover a corner. Open the page, check the red box, and download one PDF. After the page and its libraries have loaded, that visit keeps working if the network drops.
+> **Live Demo:** [https://ideafang.github.io/slide-photo-pdf/](https://ideafang.github.io/slide-photo-pdf/)
+>
+> **Privacy:** Photos never leave your device. Decoding, border detection, perspective rectification, and PDF/image export all run locally in the browser. Once the page and libraries finish loading, it continues to work offline.
 
-## Run it
+![slide-photo-pdf interface](assets/screenshot.png)
 
-The page cannot be opened by double-clicking `index.html`. The browser blocks the detection library when it is loaded from a local file. Serve the folder over HTTP instead.
+## Why this exists
 
-Python 3 is enough. No packages need to be installed.
+Conference slide photos taken from the audience are usually skewed, and a speaker or podium often blocks one corner. Open the page, drop in your photos, check or fine-tune the red quadrilateral if needed, and export one clean PDF or a stitched long JPEG in seconds.
+
+## Features
+
+- **100% client-side**: Built with OpenCV.js and libheif-js. No backend, no account, no file upload.
+- **Broad format support**: Supports JPEG, PNG, WEBP, BMP, and HEIC with no hard page-count limit (actual capacity depends on device memory).
+- **Interactive corner & edge editing**: Drag individual corner dots, or drag edge midpoints to shift an entire side while a magnifier follows your pointer.
+- **Batch framing & output controls**: Adjust box tightness globally (±6% around auto-detection), choose aspect ratio (`16:9`, `4:3`, `16:10`, `3:2`, or detected edge lengths), and select export width (`1280`, `1920`, or `2560`).
+- **Flexible export**: Download a single **PDF** or a **vertically stitched long JPEG** (with automatic canvas-size safety scaling on mobile), customize the filename (`会议PPT` by default), reverse page order for newest-first phone albums, or clear all photos for the next batch.
+- **Day & night themes + status light**: Toggle between day and night mode at the top right; the status lamp indicates loading (red), reading (blue), computing (purple), and ready (green).
+
+## Run locally
+
+Use the hosted GitHub Pages demo above, or serve this repository locally over HTTP (browsers block WASM/library loading if `index.html` is opened directly as a `file://` URL).
+
+Python 3 is enough — no extra packages needed:
 
 ```bash
 ./serve.sh
@@ -22,56 +39,43 @@ Then open http://127.0.0.1:8766/ .
 HOST=127.0.0.1 PORT=8766 ./serve.sh
 ```
 
-- `127.0.0.1` accepts connections only from this computer. This is the default.
-- `0.0.0.0` or an address such as `192.168.1.20` lets other machines open the page. Only the HTML, scripts, and libraries are transferred. The photos stay in the browser that opened the page.
+- `127.0.0.1` accepts connections only from the local machine (default).
+- `0.0.0.0` or a LAN IP such as `192.168.1.20` lets phones or other devices open the page; only static web assets are served, while photos stay on each visiting device.
 
-The first load fetches OpenCV and the HEIC decoder, about 15 MB. Refresh after that is a normal page load from the server you started.
+The first visit fetches OpenCV.js and the HEIC decoder (~15 MB).
 
-## What you can do
+## How a slide is detected
 
-- Add JPEG, PNG, WEBP, BMP, and HEIC photos with no hard page limit (memory depends on your device).
-- Drag a corner, or drag the middle of an edge to move that whole side. A magnifier follows the pointer.
-- Tighten or loosen every box together. The middle of the slider is the detected crop. The two ends are about 6% tighter and 6% wider.
-- Choose 16:9, 4:3, 16:10, 3:2, or the detected edge lengths. Output width can be 1280, 1920, or 2560.
-- Click a preview to inspect that page. Reverse the order when a phone album listed the newest photo first.
-- Name the export and download either a PDF or a vertically stitched long JPEG image. The default base name is `会议PPT`.
-- Remove every photo at once and start another batch.
+1. The photo is downscaled to ~1100 px on the long side and segmented across multiple CIE Lab luminance thresholds to find candidate bright regions.
+2. Each region produces candidate quadrilaterals via convex-hull extremes, boundary Canny/Hough snapping, and long-edge clustering.
+3. Deduplicated candidates are warped to a temporary grayscale `16:9` frame and scored by border roughness, internal line alignment, and area.
+4. Each edge of the winning box is calibrated by scanning outward from the bright slide interior toward the darker room and fitting lines; corners are taken as adjacent line intersections so partially occluded corners can still be recovered.
 
-A light at the top right shows the state: red while the libraries load, blue while photos are read, purple while a page is being calculated, and green when the page is ready. The switch next to it changes between day and night.
+During editing, previews use a lightweight working canvas for fast interaction. On export or full-size zoom, each page is decoded from the original photo on demand and perspective-warped at full resolution.
 
-## How a slide is found
-
-The same detector as the earlier Python version now runs in the browser through OpenCV.js. It does not trust one guess at the four corners.
-
-1. The photo is reduced until its long side is about 1100 pixels. Several brightness thresholds each pick out the largest bright region.
-2. Each region becomes one or more quadrilaterals.
-3. Candidates are warped to a temporary 16:9 page and scored. A border that cuts through text, or a page that is still skewed, scores worse.
-4. Each side of the winning box is scanned from the bright interior toward the darker room. The four corners are the intersections of those edges, so a hidden corner can still be placed when both edges are partly visible.
-
-The exported page is a perspective warp of the original photo. JPEG pages are embedded in one PDF, which is built in the browser.
-
-## What is in this repository
+## Repository structure
 
 | Path | Role |
 |---|---|
-| `index.html`, `app.js` | The page |
-| `detect.js` | Finding the quadrilateral, warping, and the PDF writer |
-| `vendor/` | OpenCV.js and the HEIC decoder used by the page |
-| `serve.sh` | Serves this folder over HTTP |
-| `backup/` | The previous Python server version |
+| `index.html` | Page layout, day/night themes, and responsive styling |
+| `app.js` | Media loading, editor canvas, loupe, PDF writer, and long-image stitcher |
+| `detect.js` | Browser-side slide border detection and perspective warp |
+| `vendor/` | Bundled OpenCV.js and libheif-js WASM decoder |
+| `assets/` | Documentation screenshot |
+| `serve.sh` | Lightweight local HTTP server script |
+| `backup/` | Previous Python server implementation |
 
-## Limits
+## Known limits
 
-- Content hidden by a person or a podium cannot be recovered.
-- A dark slide, a screen about as bright as the wall, or a large white panel on the slide can make the box follow the wrong rectangle.
-- If people cover most of one edge, that edge may tilt across the slide. Drag it back.
-- Warping a large phone photo is slower than the Python version, and many full-size photos can run out of memory on a phone.
-- HEIC is decoded in the browser. JPEG, PNG, and WEBP are the safer formats if a particular HEIC file fails.
+- Content blocked by a speaker or podium cannot be reconstructed.
+- Dark-theme slides, screens with brightness close to the wall, or large white panels inside a slide may mislead automatic border detection; drag the red box to adjust.
+- On mobile browsers, very large batches can still hit device memory limits, and very tall stitched long images are scaled automatically to stay within browser canvas limits.
+- HEIC decoding runs in WebAssembly; if a specific HEIC file fails to decode, JPEG/PNG/WEBP are safer alternatives.
 
-## Third-party code
+## Third-party libraries
 
-- `vendor/opencv.js` is OpenCV, Apache-2.0, from `@techstark/opencv-js` 5.0.0-release.1.
-- `vendor/libheif.js` and `vendor/libheif.wasm` are libheif-js 1.19.8, LGPL-3.0.
+- `vendor/opencv.js`: OpenCV (Apache-2.0), from `@techstark/opencv-js` 5.0.0-release.1.
+- `vendor/libheif.js` and `vendor/libheif.wasm`: libheif-js 1.19.8 (LGPL-3.0).
 
 ## License
 

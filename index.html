@@ -76,6 +76,7 @@
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.28), 0 10px 26px rgba(0, 0, 0, 0.28);
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   html { min-height: 100%; }
   body {
     margin: 0;
@@ -540,6 +541,8 @@
   .name-row span {
     display: inline-flex;
     align-items: center;
+    flex: none;
+    white-space: nowrap;
     padding: 0 11px;
     background: var(--surface);
     border-left: 1px solid var(--line);
