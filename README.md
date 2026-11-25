@@ -29,7 +29,7 @@ The first load fetches OpenCV and the HEIC decoder, about 15 MB. Refresh after t
 
 ## What you can do
 
-- Add JPEG, PNG, WEBP, BMP, and HEIC photos. Up to 30 photos at a time.
+- Add JPEG, PNG, WEBP, BMP, and HEIC photos with no hard page limit (memory depends on your device).
 - Drag a corner, or drag the middle of an edge to move that whole side. A magnifier follows the pointer.
 - Tighten or loosen every box together. The middle of the slider is the detected crop. The two ends are about 6% tighter and 6% wider.
 - Choose 16:9, 4:3, 16:10, 3:2, or the detected edge lengths. Output width can be 1280, 1920, or 2560.

@@ -9,7 +9,9 @@ function applyTheme(night) {
   localStorage.setItem("slide-theme", night ? "night" : "day");
 }
 const PAD_SPAN = 0.06;
-const MAX_PAGES = 30;
+const WORK_MAX_SIDE = 1400;
+const EDITOR_MAX_SIDE = 1100;
+const DETECT_MAX_SIDE = 1100;
 const $ = (id) => document.getElementById(id);
 applyTheme(document.documentElement.dataset.theme === "night");
 $("theme").addEventListener("change", () => applyTheme($("theme").checked));
@@ -96,47 +98,124 @@ async function canvasFromHeic(bytes) {
   return canvas;
 }
 
-async function fileToCanvas(file) {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  if (isHeic(file, bytes)) return canvasFromHeic(bytes);
-  const blob = new Blob([bytes], { type: file.type || "image/*" });
+function drawScaled(source, maxSide) {
+  const sw = source.width;
+  const sh = source.height;
+  const scale = Math.min(1, maxSide / Math.max(sw, sh));
+  const dw = Math.max(1, Math.round(sw * scale));
+  const dh = Math.max(1, Math.round(sh * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = dw;
+  canvas.height = dh;
+  canvas.getContext("2d").drawImage(source, 0, 0, dw, dh);
+  return canvas;
+}
+
+async function blobToCanvas(blob) {
   const bitmap = await createImageBitmap(blob, { imageOrientation: "from-image" });
-  const canvas = document.createElement("canvas");
-  canvas.width = bitmap.width;
-  canvas.height = bitmap.height;
-  canvas.getContext("2d").drawImage(bitmap, 0, 0);
-  bitmap.close();
-  return canvas;
-}
-
-function canvasToBgr(canvas) {
-  const image = canvas.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, canvas.width, canvas.height);
-  const rgba = cv.matFromArray(canvas.height, canvas.width, cv.CV_8UC4, image.data);
-  const bgr = new cv.Mat();
-  cv.cvtColor(rgba, bgr, cv.COLOR_RGBA2BGR);
-  rgba.delete();
-  return bgr;
-}
-
-function rgbaToCanvas(frame) {
-  const canvas = document.createElement("canvas");
-  canvas.width = frame.width;
-  canvas.height = frame.height;
-  canvas.getContext("2d").putImageData(new ImageData(frame.data, frame.width, frame.height), 0, 0);
-  return canvas;
-}
-
-function warpCanvas(page, outW) {
-  const bgr = canvasToBgr(page.source);
   try {
-    const warped = engine.warpSlide(bgr, page.corners, settings().aspect, outW, settings().pad);
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext("2d").drawImage(bitmap, 0, 0);
+    return canvas;
+  } finally {
+    bitmap.close();
+  }
+}
+
+async function loadPageMedia(file) {
+  const head = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+  if (isHeic(file, head)) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const full = await canvasFromHeic(bytes);
     try {
-      return rgbaToCanvas(engine.bgrToRgba(warped));
+      const width = full.width;
+      const height = full.height;
+      const work = Math.max(width, height) > WORK_MAX_SIDE ? drawScaled(full, WORK_MAX_SIDE) : drawScaled(full, Math.max(width, height));
+      let blob = null;
+      if (work.width < width || work.height < height) {
+        blob = await new Promise((resolve) => full.toBlob(resolve, "image/jpeg", 0.94));
+      }
+      return { width, height, work, blob };
+    } finally {
+      full.width = full.height = 0;
+    }
+  }
+  const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+  try {
+    const width = bitmap.width;
+    const height = bitmap.height;
+    const work = drawScaled(bitmap, WORK_MAX_SIDE);
+    const blob = work.width < width || work.height < height ? file : null;
+    return { width, height, work, blob };
+  } finally {
+    bitmap.close();
+  }
+}
+
+function canvasToRgbaMat(canvas) {
+  const image = canvas.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, canvas.width, canvas.height);
+  return cv.matFromArray(canvas.height, canvas.width, cv.CV_8UC4, image.data);
+}
+
+function rgbaMatToCanvas(mat) {
+  const canvas = document.createElement("canvas");
+  canvas.width = mat.cols;
+  canvas.height = mat.rows;
+  const copy = new Uint8ClampedArray(mat.data);
+  canvas.getContext("2d").putImageData(new ImageData(copy, mat.cols, mat.rows), 0, 0);
+  return canvas;
+}
+
+function detectFromWork(work, fullW, fullH) {
+  const small = Math.max(work.width, work.height) > DETECT_MAX_SIDE ? drawScaled(work, DETECT_MAX_SIDE) : work;
+  const rgba = canvasToRgbaMat(small);
+  try {
+    const found = engine.detectQuad(rgba);
+    const sx = fullW / small.width;
+    const sy = fullH / small.height;
+    const corners = engine.orderPoints(found.corners.map((p) => [
+      Math.max(0, Math.min(fullW - 1, p[0] * sx)),
+      Math.max(0, Math.min(fullH - 1, p[1] * sy)),
+    ]));
+    return { corners, confidence: found.confidence };
+  } finally {
+    rgba.delete();
+    if (small !== work) small.width = small.height = 0;
+  }
+}
+
+function warpFromCanvas(sourceCanvas, corners, outW) {
+  const rgba = canvasToRgbaMat(sourceCanvas);
+  try {
+    const warped = engine.warpSlide(rgba, corners, settings().aspect, outW, settings().pad);
+    try {
+      return rgbaMatToCanvas(warped);
     } finally {
       warped.delete();
     }
   } finally {
-    bgr.delete();
+    rgba.delete();
+  }
+}
+
+function warpPreviewCanvas(page, outW) {
+  const sx = page.work.width / page.width;
+  const sy = page.work.height / page.height;
+  const scaled = page.corners.map((p) => [p[0] * sx, p[1] * sy]);
+  return warpFromCanvas(page.work, scaled, outW);
+}
+
+async function warpFullCanvas(page, outW) {
+  if (!page.blob || (page.work.width >= page.width && page.work.height >= page.height)) {
+    return warpPreviewCanvas(page, outW);
+  }
+  const full = await blobToCanvas(page.blob);
+  try {
+    return warpFromCanvas(full, page.corners, outW);
+  } finally {
+    full.width = full.height = 0;
   }
 }
 
@@ -238,40 +317,27 @@ async function addFiles(fileList) {
     $("status").textContent = state.bootError || "识别库还在加载，请稍候再选照片。";
     return;
   }
-  if (state.pages.length + files.length > MAX_PAGES) {
-    $("status").textContent = `一次最多 ${MAX_PAGES} 张`;
-    return;
-  }
-  showBusy(`正在读取 ${files.length} 张照片`, "请稍候，不要关闭页面。");
+  showBusy(`正在处理 ${files.length} 张照片`, "请稍候，不要关闭页面。");
   setLamp("upload", "正在读取照片");
   await paintFrame();
   try {
-    const loaded = [];
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
+      setLamp("upload", "正在读取照片");
       showBusy(`正在读取第 ${i + 1} / ${files.length} 张`, file.name);
-      loaded.push({ file, source: await fileToCanvas(file) });
-    }
-    setLamp("compute", "正在计算");
-    showBusy(`正在计算 ${loaded.length} 张照片`, "请稍候，不要关闭页面。");
-    await paintFrame();
-    for (let i = 0; i < loaded.length; i++) {
-      const { file, source } = loaded[i];
-      showBusy(`正在计算第 ${i + 1} / ${loaded.length} 张`, file.name);
       await paintFrame();
-      const bgr = canvasToBgr(source);
-      let found;
-      try {
-        found = engine.detectQuad(bgr);
-      } finally {
-        bgr.delete();
-      }
+      const media = await loadPageMedia(file);
+      setLamp("compute", "正在计算");
+      showBusy(`正在识别第 ${i + 1} / ${files.length} 张`, file.name);
+      await paintFrame();
+      const found = detectFromWork(media.work, media.width, media.height);
       state.pages.push({
         id: `${Date.now().toString(36)}-${i}-${Math.random().toString(36).slice(2, 8)}`,
         name: file.name || `照片 ${state.pages.length + 1}`,
-        width: source.width,
-        height: source.height,
-        source,
+        width: media.width,
+        height: media.height,
+        work: media.work,
+        blob: media.blob,
         corners: found.corners,
         confidence: found.confidence,
       });
@@ -373,18 +439,26 @@ function move(index, delta) {
   render();
 }
 
+function disposePage(page) {
+  if (!page) return;
+  if (page.previewUrl) URL.revokeObjectURL(page.previewUrl);
+  if (page.work) {
+    page.work.width = page.work.height = 0;
+    page.work = null;
+  }
+  page.blob = null;
+}
+
 function remove(index) {
   const [page] = state.pages.splice(index, 1);
-  if (page && page.previewUrl) URL.revokeObjectURL(page.previewUrl);
+  disposePage(page);
   render();
 }
 
 function clearPages() {
   if (!$("busy").hidden) return;
   closeDetail();
-  for (const page of state.pages) {
-    if (page.previewUrl) URL.revokeObjectURL(page.previewUrl);
-  }
+  for (const page of state.pages) disposePage(page);
   state.pages = [];
   render();
   $("status").textContent = "已清空全部照片，可以继续放入下一批。";
@@ -395,9 +469,8 @@ async function redetect(page) {
   showBusy("正在重新识别这一张", page.name);
   setLamp("compute", "正在计算");
   await paintFrame();
-  const bgr = canvasToBgr(page.source);
   try {
-    const found = engine.detectQuad(bgr);
+    const found = detectFromWork(page.work, page.width, page.height);
     page.corners = found.corners;
     page.confidence = found.confidence;
     $("status").textContent = "";
@@ -405,7 +478,6 @@ async function redetect(page) {
   } catch (err) {
     $("status").textContent = err.message || String(err);
   } finally {
-    bgr.delete();
     hideBusy();
     if (state.ready) setLamp("ready", "就绪");
   }
@@ -413,11 +485,12 @@ async function redetect(page) {
 
 function mountEditor(canvas, page) {
   const ctx = canvas.getContext("2d");
-  const src = page.source;
+  const src = page.work;
   let drag = null;
   let lastFull = null;
-  canvas.width = src.width;
-  canvas.height = src.height;
+  const edScale = Math.min(1, EDITOR_MAX_SIDE / Math.max(src.width, src.height));
+  canvas.width = Math.max(1, Math.round(src.width * edScale));
+  canvas.height = Math.max(1, Math.round(src.height * edScale));
   // 第一次绘制发生在卡片插入页面前，此时还没有排版宽度，手柄会被算成 1 像素级。
   // 等进入页面并完成布局后再画，圆点和边框手柄才是屏幕上的固定大小。
   requestAnimationFrame(() => {
@@ -558,7 +631,7 @@ function mountEditor(canvas, page) {
     lastFull = [x, y];
     canvas.setPointerCapture(ev.pointerId);
     const focus = drag.kind === "corner" ? page.corners[drag.index] : [x, y];
-    updateLoupe(ev, [focus[0] * canvas.width / page.width, focus[1] * canvas.height / page.height]);
+    updateLoupe(ev, [focus[0] * src.width / page.width, focus[1] * src.height / page.height]);
   });
   canvas.addEventListener("pointermove", (ev) => {
     if (!drag) return;
@@ -575,7 +648,7 @@ function mountEditor(canvas, page) {
     }
     draw();
     const focus = drag.kind === "corner" ? page.corners[drag.index] : [x, y];
-    updateLoupe(ev, [focus[0] * canvas.width / page.width, focus[1] * canvas.height / page.height]);
+    updateLoupe(ev, [focus[0] * src.width / page.width, focus[1] * src.height / page.height]);
   });
   function endDrag() {
     if (!drag) return;
@@ -590,8 +663,9 @@ function mountEditor(canvas, page) {
 
 async function refreshPreview(page) {
   const mine = page.token = (page.token || 0) + 1;
+  let preview = null;
   try {
-    const preview = warpCanvas(page, Math.min(settings().width, 1100));
+    preview = warpPreviewCanvas(page, Math.min(settings().width, 960));
     const blob = await new Promise((resolve) => preview.toBlob(resolve, "image/jpeg", 0.84));
     if (mine !== page.token) return;
     if (page.previewUrl) URL.revokeObjectURL(page.previewUrl);
@@ -600,6 +674,8 @@ async function refreshPreview(page) {
   } catch (err) {
     if (mine !== page.token) return;
     $("status").textContent = err.message || String(err);
+  } finally {
+    if (preview) preview.width = preview.height = 0;
   }
 }
 
@@ -623,8 +699,14 @@ function hideLoupe() {
   if (el) el.hidden = true;
 }
 
-function refreshAllPreviews() {
-  state.pages.forEach(refreshPreview);
+let previewBatch = 0;
+async function refreshAllPreviews() {
+  const mine = ++previewBatch;
+  for (let i = 0; i < state.pages.length; i++) {
+    if (mine !== previewBatch) return;
+    await refreshPreview(state.pages[i]);
+    if (i % 2 === 1) await paintFrame();
+  }
 }
 
 let detailUrl = "";
@@ -656,8 +738,9 @@ async function openDetail(page) {
   box.hidden = false;
   $("lightbox-cap").textContent = "正在生成大图…";
   $("lightbox-img").removeAttribute("src");
+  let full = null;
   try {
-    const full = warpCanvas(page, settings().width);
+    full = await warpFullCanvas(page, settings().width);
     const blob = await new Promise((resolve) => full.toBlob(resolve, "image/jpeg", 0.9));
     if (detailUrl) URL.revokeObjectURL(detailUrl);
     detailUrl = URL.createObjectURL(blob);
@@ -665,6 +748,8 @@ async function openDetail(page) {
     $("lightbox-cap").textContent = "单击空白处或按 Esc 关闭";
   } catch (err) {
     $("lightbox-cap").textContent = err.message || "大图生成失败";
+  } finally {
+    if (full) full.width = full.height = 0;
   }
 }
 function closeDetail() {
@@ -759,7 +844,7 @@ $("export").addEventListener("click", async () => {
       const page = state.pages[i];
       showBusy(`正在生成第 ${i + 1} / ${state.pages.length} 页`, page.name);
       await paintFrame();
-      const full = warpCanvas(page, settings().width);
+      const full = await warpFullCanvas(page, settings().width);
       encoded.push({
         jpeg: await canvasJpeg(full, 0.9),
         width: full.width,
@@ -798,7 +883,7 @@ $("export-long").addEventListener("click", async () => {
       const page = state.pages[i];
       showBusy(`正在处理第 ${i + 1} / ${state.pages.length} 页`, page.name);
       await paintFrame();
-      warped.push(warpCanvas(page, warpW));
+      warped.push(await warpFullCanvas(page, warpW));
     }
     showBusy("正在拼接并编码长图", filename);
     await paintFrame();

@@ -30,11 +30,8 @@
       return sorted[lo] * (hi - rank) + sorted[hi] * (rank - lo);
     }
 
-    function percentileU8(data, p) {
-      const n = data.length;
+    function percentileHist(hist, n, p) {
       if (!n) return 0;
-      const hist = new Uint32Array(256);
-      for (let i = 0; i < n; i++) hist[data[i]]++;
       const rank = (p / 100) * (n - 1);
       const at = (index) => {
         let acc = 0;
@@ -50,16 +47,36 @@
       return at(lo) * (hi - rank) + at(hi) * (rank - lo);
     }
 
+    function percentileU8(data, p) {
+      const n = data.length;
+      if (!n) return 0;
+      const hist = new Uint32Array(256);
+      for (let i = 0; i < n; i++) hist[data[i]]++;
+      return percentileHist(hist, n, p);
+    }
+
+    const medianBuf = new Float64Array(64);
     function medianRange(samples, start, end) {
+      const n = end - start;
+      if (n <= 0) return 0;
+      if (n <= medianBuf.length) {
+        for (let i = 0; i < n; i++) {
+          const v = samples[start + i];
+          let j = i - 1;
+          while (j >= 0 && medianBuf[j] > v) {
+            medianBuf[j + 1] = medianBuf[j];
+            j--;
+          }
+          medianBuf[j + 1] = v;
+        }
+        const mid = n >> 1;
+        return (n & 1) ? medianBuf[mid] : (medianBuf[mid - 1] + medianBuf[mid]) * 0.5;
+      }
       const tmp = [];
       for (let i = start; i < end; i++) tmp.push(samples[i]);
       tmp.sort((a, b) => a - b);
-      const n = tmp.length;
-      if (!n) return 0;
-      const mid = (n - 1) / 2;
-      const lo = Math.floor(mid);
-      const hi = Math.ceil(mid);
-      return lo === hi ? tmp[lo] : (tmp[lo] + tmp[hi]) / 2;
+      const mid = n >> 1;
+      return (n & 1) ? tmp[mid] : (tmp[mid - 1] + tmp[mid]) * 0.5;
     }
 
     function clonePt(p) {
@@ -188,26 +205,29 @@
       return [dst, scale];
     }
 
-    function grayOf(bgr) {
+    function grayOf(image) {
+      const ch = image.channels();
+      if (ch === 1) return image.clone();
       const gray = new cv.Mat();
-      cv.cvtColor(bgr, gray, cv.COLOR_BGR2GRAY);
+      cv.cvtColor(image, gray, ch === 4 ? cv.COLOR_RGBA2GRAY : cv.COLOR_BGR2GRAY);
       return gray;
     }
 
-    function largestMask(blur, percentileValue) {
+    function largestMask(blur, percentileValue, blurHist, morphKernel) {
       const width = blur.cols;
       const height = blur.rows;
-      const threshold = percentileU8(blur.data, percentileValue);
-      const raw = new Uint8Array(width * height);
-      const src = blur.data;
-      for (let i = 0; i < raw.length; i++) raw[i] = src[i] >= threshold ? 255 : 0;
-      const rawMat = cv.matFromArray(height, width, cv.CV_8UC1, raw);
-      const kernelSize = Math.max(5, Math.round(0.012 * Math.max(width, height)) | 1);
-      const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(kernelSize, kernelSize));
+      const threshold = percentileHist(blurHist, width * height, percentileValue);
+      const rawMat = new cv.Mat();
+      if (threshold <= 0) {
+        rawMat.create(height, width, cv.CV_8UC1);
+        rawMat.setTo(new cv.Scalar(255));
+      } else {
+        cv.threshold(blur, rawMat, Math.ceil(threshold) - 1, 255, cv.THRESH_BINARY);
+      }
       const closed = new cv.Mat();
       const opened = new cv.Mat();
-      cv.morphologyEx(rawMat, closed, cv.MORPH_CLOSE, kernel, new cv.Point(-1, -1), 2);
-      cv.morphologyEx(closed, opened, cv.MORPH_OPEN, kernel, new cv.Point(-1, -1), 1);
+      cv.morphologyEx(rawMat, closed, cv.MORPH_CLOSE, morphKernel, new cv.Point(-1, -1), 2);
+      cv.morphologyEx(closed, opened, cv.MORPH_OPEN, morphKernel, new cv.Point(-1, -1), 1);
       const contours = new cv.MatVector();
       const hierarchy = new cv.Mat();
       cv.findContours(opened, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
@@ -225,7 +245,6 @@
         }
       }
       rawMat.delete();
-      kernel.delete();
       closed.delete();
       opened.delete();
       hierarchy.delete();
@@ -278,35 +297,32 @@
       return segments;
     }
 
-    function boundarySegments(gray, contour) {
+    function boundarySegments(gray, contour, precomputedEdges) {
       const height = gray.rows;
       const width = gray.cols;
-      const mask = new cv.Mat.zeros(height, width, cv.CV_8UC1);
+      const band = Math.max(8, (0.025 * Math.max(height, width)) | 0) | 1;
+      const ring = new cv.Mat.zeros(height, width, cv.CV_8UC1);
       const contours = new cv.MatVector();
       contours.push_back(contour);
-      cv.drawContours(mask, contours, -1, new cv.Scalar(255), -1);
-      const band = Math.max(8, (0.025 * Math.max(height, width)) | 0) | 1;
-      const kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(band, band));
-      const dilated = new cv.Mat();
-      const eroded = new cv.Mat();
-      cv.dilate(mask, dilated, kernel);
-      cv.erode(mask, eroded, kernel);
-      const ring = new cv.Mat();
-      cv.subtract(dilated, eroded, ring);
-      const blurred = new cv.Mat();
-      cv.GaussianBlur(gray, blurred, new cv.Size(3, 3), 0);
-      const edges = new cv.Mat();
-      cv.Canny(blurred, edges, 30, 110);
+      cv.drawContours(ring, contours, -1, new cv.Scalar(255), band);
+      let edges = precomputedEdges;
+      let blurred = null;
+      if (!edges) {
+        blurred = new cv.Mat();
+        cv.GaussianBlur(gray, blurred, new cv.Size(3, 3), 0);
+        edges = new cv.Mat();
+        cv.Canny(blurred, edges, 30, 110);
+      }
       const kept = new cv.Mat();
       cv.bitwise_and(edges, ring, kept);
       const minLen = (0.07 * Math.max(height, width)) | 0;
       const segments = houghSegments(kept, 30, minLen, (0.03 * Math.max(height, width)) | 0);
-      mask.delete(); contours.delete(); kernel.delete(); dilated.delete(); eroded.delete();
-      ring.delete(); blurred.delete(); edges.delete(); kept.delete();
+      ring.delete(); contours.delete(); kept.delete();
+      if (blurred) { blurred.delete(); edges.delete(); }
       return segments;
     }
 
-    function snapQuad(gray, contour) {
+    function snapQuad(gray, contour, precomputedEdges) {
       const height = gray.rows;
       const width = gray.cols;
       const [initial, hull] = extremeQuad(contour);
@@ -314,7 +330,7 @@
       for (const p of hull) { cx += p[0]; cy += p[1]; }
       cx /= hull.length; cy /= hull.length;
       const center = [cx, cy];
-      const segments = boundarySegments(gray, contour);
+      const segments = boundarySegments(gray, contour, precomputedEdges);
       const lines = [];
       const search = 0.1 * Math.max(height, width);
       for (let index = 0; index < 4; index++) {
@@ -520,7 +536,7 @@
       const interpolation = Math.max(image.rows, image.cols) > Math.max(width, height) * 1.4 ? cv.INTER_AREA : cv.INTER_CUBIC;
       cv.warpPerspective(
         image, out, matrix, new cv.Size(width, height),
-        interpolation, cv.BORDER_CONSTANT, new cv.Scalar(255, 255, 255),
+        interpolation, cv.BORDER_CONSTANT, new cv.Scalar(255, 255, 255, 255),
       );
       src.delete();
       dst.delete();
@@ -528,15 +544,13 @@
       return out;
     }
 
-    function candidateScore(image, quad) {
-      if (!validQuad(quad, image.cols, image.rows)) return -1e9;
-      const warped = warpSlide(image, quad, "16:9", 640, 0);
-      const gray = grayOf(warped);
-      const roughness = borderRoughness(gray);
-      const deviation = axisDeviation(gray);
-      const areaFrac = shoelace(quad) / (image.cols * image.rows);
+    function candidateScore(gray, quad) {
+      if (!validQuad(quad, gray.cols, gray.rows)) return -1e9;
+      const warped = warpSlide(gray, quad, "16:9", 640, 0);
+      const roughness = borderRoughness(warped);
+      const deviation = axisDeviation(warped);
+      const areaFrac = shoelace(quad) / (gray.cols * gray.rows);
       warped.delete();
-      gray.delete();
       return -roughness - 14 * deviation + 10 * areaFrac;
     }
 
@@ -597,20 +611,34 @@
       const contours = new cv.MatVector();
       contours.push_back(poly);
       cv.fillPoly(mask, contours, new cv.Scalar(255));
-      const kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(31, 31));
-      const core = new cv.Mat();
-      cv.erode(mask, core, kernel);
+      const core = mask.clone();
+      cv.polylines(core, contours, true, new cv.Scalar(0), 31);
       const maskData = mask.data;
       const coreData = core.data;
-      let coreCount = 0;
-      for (let i = 0; i < coreData.length; i++) if (coreData[i]) coreCount++;
-      const values = [];
-      const source = coreCount > 50 ? coreData : maskData;
       const grayData = gray.data;
-      for (let i = 0; i < source.length; i++) if (source[i]) values.push(grayData[i]);
-      poly.delete(); contours.delete(); kernel.delete(); core.delete(); mask.delete();
-      if (values.length < 20) return quad;
-      const brightFloor = Math.max(130, percentile(values, 40) * 0.72);
+      const coreHist = new Uint32Array(256);
+      let coreCount = 0;
+      for (let i = 0; i < coreData.length; i++) {
+        if (coreData[i]) {
+          coreHist[grayData[i]]++;
+          coreCount++;
+        }
+      }
+      let hist = coreHist;
+      let count = coreCount;
+      if (coreCount <= 50) {
+        hist = new Uint32Array(256);
+        count = 0;
+        for (let i = 0; i < maskData.length; i++) {
+          if (maskData[i]) {
+            hist[grayData[i]]++;
+            count++;
+          }
+        }
+      }
+      poly.delete(); contours.delete(); core.delete(); mask.delete();
+      if (count < 20) return quad;
+      const brightFloor = Math.max(130, percentileHist(hist, count, 40) * 0.72);
       const lines = [];
       for (let index = 0; index < 4; index++) {
         const start = quad[index];
@@ -672,6 +700,20 @@
       return refined;
     }
 
+    function isDuplicateQuad(quad, seen) {
+      const ordered = orderPoints(quad);
+      for (const prev of seen) {
+        let maxD = 0;
+        for (let i = 0; i < 4; i++) {
+          const d = Math.hypot(ordered[i][0] - prev[i][0], ordered[i][1] - prev[i][1]);
+          if (d > maxD) maxD = d;
+        }
+        if (maxD < 3) return true;
+      }
+      seen.push(ordered);
+      return false;
+    }
+
     function detectQuad(image) {
       const fullH = image.rows;
       const fullW = image.cols;
@@ -681,7 +723,14 @@
         const gray = grayOf(small);
         owned.push(gray);
         const lab = new cv.Mat();
-        cv.cvtColor(small, lab, cv.COLOR_BGR2Lab);
+        if (small.channels() === 4) {
+          const rgb = new cv.Mat();
+          cv.cvtColor(small, rgb, cv.COLOR_RGBA2RGB);
+          cv.cvtColor(rgb, lab, cv.COLOR_RGB2Lab);
+          rgb.delete();
+        } else {
+          cv.cvtColor(small, lab, cv.COLOR_BGR2Lab);
+        }
         owned.push(lab);
         const labData = lab.data;
         const ldata = new Uint8Array(lab.rows * lab.cols);
@@ -692,17 +741,30 @@
         const sigma = Math.max(3, 0.012 * Math.max(gray.rows, gray.cols));
         cv.GaussianBlur(luminance, blur, new cv.Size(0, 0), sigma, sigma);
         owned.push(blur);
+        const blurHist = new Uint32Array(256);
+        const blurData = blur.data;
+        for (let i = 0; i < blurData.length; i++) blurHist[blurData[i]]++;
+        const kernelSize = Math.max(5, Math.round(0.012 * Math.max(gray.cols, gray.rows)) | 1);
+        const morphKernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(kernelSize, kernelSize));
+        owned.push(morphKernel);
+        const blurredGray = new cv.Mat();
+        cv.GaussianBlur(gray, blurredGray, new cv.Size(3, 3), 0);
+        owned.push(blurredGray);
+        const cannyEdges = new cv.Mat();
+        cv.Canny(blurredGray, cannyEdges, 30, 110);
+        owned.push(cannyEdges);
         let bestQuad = null;
         let bestScore = -1e9;
+        const seen = [];
         for (const level of [46, 50, 54, 58, 62, 66, 72]) {
-          const contour = largestMask(blur, level);
+          const contour = largestMask(blur, level, blurHist, morphKernel);
           if (!contour) continue;
           try {
-            const [snapped, initial] = snapQuad(gray, contour);
+            const [snapped, initial] = snapQuad(gray, contour, cannyEdges);
             const candidates = [snapped, initial, longEdgeQuad(contour)];
             for (const quad of candidates) {
-              if (!quad) continue;
-              const score = candidateScore(small, quad);
+              if (!quad || isDuplicateQuad(quad, seen)) continue;
+              const score = candidateScore(gray, quad);
               if (score > bestScore) {
                 bestScore = score;
                 bestQuad = quad;
