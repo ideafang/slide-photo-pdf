@@ -1,7 +1,18 @@
 const state = { pages: [], ready: false };
+
+function applyTheme(night) {
+  document.documentElement.dataset.theme = night ? "night" : "day";
+  const input = $("theme");
+  if (!input) return;
+  input.checked = night;
+  $("theme-label").textContent = night ? "夜晚" : "白天";
+  localStorage.setItem("slide-theme", night ? "night" : "day");
+}
 const PAD_SPAN = 0.06;
 const MAX_PAGES = 30;
 const $ = (id) => document.getElementById(id);
+applyTheme(document.documentElement.dataset.theme === "night");
+$("theme").addEventListener("change", () => applyTheme($("theme").checked));
 let cv = null;
 let engine = null;
 let heif = null;
@@ -224,7 +235,7 @@ async function addFiles(fileList) {
     return;
   }
   showBusy(`正在读取 ${files.length} 张照片`, "请稍候，不要关闭页面。");
-  setLamp("upload", "正在上传图片");
+  setLamp("upload", "正在读取照片");
   await paintFrame();
   try {
     const loaded = [];
@@ -735,7 +746,7 @@ async function boot() {
     }
     state.ready = true;
     setLamp("ready", "就绪");
-    $("status").textContent = "可以把照片拖进来。识别在这台设备上完成，不会上传。";
+    $("status").textContent = "可以把照片放进来。照片只在这个浏览器里处理，不会上传。";
   } catch (err) {
     state.bootError = `识别库加载失败：${err.message || err}`;
     setLamp("load", "计算脚本加载失败");

@@ -4,8 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>开会 PPT 整理</title>
+<script>
+(function () {
+  var saved = localStorage.getItem("slide-theme");
+  var night = saved ? saved === "night" : window.matchMedia("(prefers-color-scheme: dark)").matches;
+  document.documentElement.dataset.theme = night ? "night" : "day";
+})();
+</script>
 <style>
-  :root {
+  :root, html[data-theme="day"] {
+    color-scheme: light;
     --bg: #f4f1ea;
     --card: #fffdf9;
     --ink: #1d2430;
@@ -15,6 +23,26 @@
     --accent-soft: #e7f0f8;
     --warn: #8a4b08;
     --warn-bg: #fff4e4;
+    --control: #fff;
+    --drop-line: #9aafc4;
+    --drop-over: #d7e7f6;
+    --preview: #ece7df;
+  }
+  html[data-theme="night"] {
+    color-scheme: dark;
+    --bg: #14181f;
+    --card: #1e242e;
+    --ink: #e8e6e1;
+    --muted: #a8b0bb;
+    --line: #343c49;
+    --accent: #8eb7e6;
+    --accent-soft: #243246;
+    --warn: #f0c27a;
+    --warn-bg: #3a2e1c;
+    --control: #2a313c;
+    --drop-line: #4d6278;
+    --drop-over: #2c425c;
+    --preview: #12161c;
   }
   * { box-sizing: border-box; }
   body {
@@ -29,13 +57,21 @@
   header, main { width: min(1100px, calc(100% - 32px)); margin: 0 auto; }
   header { padding: 32px 0 4px; }
   .head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+  .head-tools { display: flex; align-items: center; gap: 10px; flex: none; }
   h1 { margin: 0; font-size: 28px; font-weight: 680; letter-spacing: 0.01em; }
+  .switch { display: inline-flex; align-items: center; gap: 8px; color: var(--ink); font-size: 13px; cursor: pointer; user-select: none; }
+  .switch input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  .track { position: relative; width: 40px; height: 22px; border: 1px solid var(--line); border-radius: 999px; background: var(--line); }
+  .track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--card); transition: transform 0.15s ease; }
+  .switch input:checked + .track { background: var(--accent); border-color: var(--accent); }
+  .switch input:checked + .track::after { transform: translateX(18px); }
+  .switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
   .lamp {
     flex: none;
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    margin-top: 6px;
+    margin-top: 0;
     padding: 6px 12px 6px 8px;
     background: var(--card);
     border: 1px solid var(--line);
@@ -55,10 +91,19 @@
   .lamp[data-state="ready"] i { background: #1f9d55; box-shadow: 0 0 0 3px rgba(31, 157, 85, 0.18); }
   .lamp[data-state="upload"] i { background: #2f6fed; box-shadow: 0 0 0 3px rgba(47, 111, 237, 0.18); }
   .lamp[data-state="compute"] i { background: #6d5efc; box-shadow: 0 0 0 3px rgba(109, 94, 252, 0.2); }
-  .lead { margin: 8px 0 0; max-width: 46em; color: var(--muted); }
+  .lead { margin: 10px 0 0; max-width: 40em; font-size: 18px; }
+  .privacy {
+    margin: 8px 0 0;
+    max-width: 46em;
+    padding: 8px 12px;
+    background: var(--accent-soft);
+    color: var(--ink);
+    border-radius: 10px;
+    font-size: 14px;
+  }
   .steps {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: 10px;
     margin: 18px 0 0;
     padding: 0;
@@ -80,19 +125,19 @@
     padding: 16px;
   }
   .drop {
-    border: 1.5px dashed #9aafc4;
+    border: 1.5px dashed var(--drop-line);
     background: var(--accent-soft);
     border-radius: 12px;
     padding: 26px 16px;
     text-align: center;
   }
-  .drop.over { border-color: var(--accent); background: #d7e7f6; }
+  .drop.over { border-color: var(--accent); background: var(--drop-over); }
   .drop h2 { margin: 0 0 6px; font-size: 18px; }
   .drop p { margin: 0; color: var(--muted); }
   button, .file-btn, input[type="text"] {
     font: inherit;
     border: 1px solid var(--line);
-    background: #fff;
+    background: var(--control);
     color: var(--ink);
     border-radius: 8px;
   }
@@ -109,7 +154,7 @@
   .title { font-size: 14px; font-weight: 650; }
   .title b { font-weight: 650; color: var(--accent); }
   .help, .cap, .hint, .status, .scale { color: var(--muted); font-size: 13px; }
-  select, input[type="text"] { padding: 8px 10px; background: #fff; }
+  select, input[type="text"] { padding: 8px 10px; background: var(--control); color: var(--ink); }
   input[type="range"] { width: 100%; accent-color: var(--accent); }
   .scale { display: flex; justify-content: space-between; }
   .order-bar {
@@ -148,7 +193,7 @@
     width: 100%;
     min-height: 160px;
     object-fit: contain;
-    background: #ece7df;
+    background: var(--preview);
     border-radius: 10px;
     border: 1px solid var(--line);
     cursor: zoom-in;
@@ -220,7 +265,7 @@
     width: 42px;
     height: 42px;
     margin: 0 auto;
-    border: 4px solid #e2d9cc;
+    border: 4px solid var(--line);
     border-top-color: var(--accent);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
@@ -234,6 +279,7 @@
   .name-row { display: flex; align-items: center; gap: 8px; }
   .name-row input { width: min(280px, 100%); }
   @media (max-width: 960px) {
+    .steps { grid-template-columns: 1fr 1fr; }
     .controls { grid-template-columns: 1fr 1fr; }
     .controls .field:last-child { grid-column: 1 / -1; }
     .layout { grid-template-columns: 1fr 1fr; }
@@ -244,6 +290,7 @@
     h1 { font-size: 22px; }
     .head-row { align-items: center; }
     .lamp { margin-top: 0; }
+    .head-tools { align-items: flex-end; flex-direction: column; }
     .steps, .controls, .layout { grid-template-columns: 1fr; }
     .controls .field:last-child { grid-column: auto; }
     .steps { gap: 6px; }
@@ -271,7 +318,8 @@
   @media (max-height: 480px) and (orientation: landscape) {
     header { padding-top: 8px; }
     .lead { display: none; }
-    .steps { grid-template-columns: repeat(3, 1fr); margin-top: 8px; }
+    .steps { grid-template-columns: repeat(2, 1fr); margin-top: 8px; }
+    .privacy { display: none; }
     .steps li { padding: 6px 8px; }
     .layout { grid-template-columns: 1fr 1fr; }
     .drop { padding: 10px; }
@@ -282,20 +330,29 @@
 <header>
   <div class="head-row">
     <h1>开会 PPT 整理</h1>
-    <div class="lamp" id="lamp" data-state="load"><i></i><span id="lamp-text">正在加载计算脚本</span></div>
+    <div class="head-tools">
+      <label class="switch">
+        <input id="theme" type="checkbox">
+        <span class="track"></span>
+        <span id="theme-label">白天</span>
+      </label>
+      <div class="lamp" id="lamp" data-state="load"><i></i><span id="lamp-text">正在加载计算脚本</span></div>
+    </div>
   </div>
-  <p class="lead">把会场里拍斜的幻灯片照片，裁成正面的一页页，再合成一个 PDF。识别和生成都在这台设备上完成，照片不会上传。页面加载完成后，断网也可以继续处理。</p>
+  <p class="lead">把会场里拍斜的幻灯片拉成正面，再合成一个 PDF。</p>
+  <p class="privacy">照片不会上传。识别、拉正和生成 PDF 都只在当前这个浏览器里进行。</p>
   <ol class="steps">
-    <li><b>1. 放入照片</b><span>一次可以放很多张，顺序就是 PDF 页序。</span></li>
-    <li><b>2. 核对红框</b><span>红框里的内容会留下。拖圆点贴住幻灯片的四条边。</span></li>
-    <li><b>3. 看预览</b><span>满意后填写文件名并下载。手机上预览在原图下面。</span></li>
+    <li><b>是什么</b><span>一个打开就能用的网页，用来整理拍下来的投影。</span></li>
+    <li><b>做什么</b><span>找出屏幕，拉成端正的一页页，按顺序装进一个 PDF。</span></li>
+    <li><b>怎么做</b><span>根据还露出来的屏幕四边定位。计算不离开这台设备。</span></li>
+    <li><b>怎么操作</b><span>放入照片，把红框拖到四条边上，看预览后下载。</span></li>
   </ol>
 </header>
 <main>
   <section class="panel">
     <div class="drop" id="drop">
       <h2>选择或拖入照片</h2>
-      <p>JPG、PNG、HEIC、WEBP 都可以。手机上点下面的按钮，从相册选取。</p>
+      <p>JPG、PNG、HEIC、WEBP 都可以。照片只留在这台设备上。</p>
       <div style="margin-top:12px"><button type="button" class="file-btn" id="pick">选择图片</button></div>
       <input id="file" type="file" accept="image/*,.heic,.heif" multiple hidden>
     </div>

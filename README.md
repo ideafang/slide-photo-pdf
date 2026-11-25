@@ -37,7 +37,7 @@ The first load fetches OpenCV and the HEIC decoder, about 15 MB. Refresh after t
 - Name the PDF and download it. The default name is `会议PPT.pdf`.
 - Remove every photo at once and start another batch.
 
-A light at the top right shows the state: red while the libraries load, blue while photos are read, purple while a page is being calculated, and green when the page is ready.
+A light at the top right shows the state: red while the libraries load, blue while photos are read, purple while a page is being calculated, and green when the page is ready. The switch next to it changes between day and night.
 
 ## How a slide is found
 
