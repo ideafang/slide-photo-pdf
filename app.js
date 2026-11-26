@@ -914,19 +914,68 @@ function closeSavePdf() {
 }
 $("save-pdf-close").addEventListener("click", closeSavePdf);
 
+function libUrls(name) {
+  const listed = window.SLIDE_LIBS && window.SLIDE_LIBS[name];
+  return Array.isArray(listed) && listed.length ? listed : [];
+}
+
+function loadScript(url) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = url;
+    script.async = false;
+    script.onload = () => resolve();
+    script.onerror = () => {
+      script.remove();
+      reject(new Error(url));
+    };
+    document.head.append(script);
+  });
+}
+
+async function loadFirstScript(name) {
+  const urls = libUrls(name);
+  let last = null;
+  for (const url of urls) {
+    try {
+      await loadScript(url);
+      return url;
+    } catch (err) {
+      last = err;
+    }
+  }
+  throw last || new Error(`${name} 没有可用地址`);
+}
+
+async function fetchFirst(name) {
+  const urls = libUrls(name);
+  let last = null;
+  for (const url of urls) {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`${response.status} ${url}`);
+      return response;
+    } catch (err) {
+      last = err;
+    }
+  }
+  throw last || new Error(`${name} 没有可用地址`);
+}
+
 async function boot() {
   setLamp("load", "正在加载计算脚本");
   $("status").textContent = "正在加载识别库…";
   try {
+    await loadFirstScript("opencv");
     let lib = window.cv;
     if (lib && typeof lib.then === "function") lib = await lib;
     if (lib && typeof lib.then === "function") lib = await lib;
     cv = lib;
     if (typeof cv.Mat !== "function") throw new Error("OpenCV 没有准备好");
     engine = SlideLocal.create(cv);
+    await loadFirstScript("heifJs");
     if (typeof libheif === "function") {
-      const wasm = await fetch("vendor/libheif.wasm");
-      if (!wasm.ok) throw new Error("HEIC 解码库没有加载到");
+      const wasm = await fetchFirst("heifWasm");
       heif = await libheif({ wasmBinary: await wasm.arrayBuffer() });
     }
     state.ready = true;

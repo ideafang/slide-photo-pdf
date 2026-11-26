@@ -42,7 +42,7 @@ HOST=127.0.0.1 PORT=8766 ./serve.sh
 - `127.0.0.1` accepts connections only from the local machine (default).
 - `0.0.0.0` or a LAN IP such as `192.168.1.20` lets phones or other devices open the page; only static web assets are served, while photos stay on each visiting device.
 
-The first visit fetches OpenCV.js and the HEIC decoder (~15 MB).
+The first visit fetches OpenCV.js and the HEIC decoder (~15 MB). The page tries jsDelivr first and falls back to the copies in `vendor/` if that CDN is unreachable. After the libraries have loaded, later work on that visit does not need the network.
 
 ## How a slide is detected
 
@@ -60,7 +60,7 @@ During editing, previews use a lightweight working canvas for fast interaction. 
 | `index.html` | Page layout, day/night themes, and responsive styling |
 | `app.js` | Media loading, editor canvas, loupe, PDF writer, and long-image stitcher |
 | `detect.js` | Browser-side slide border detection and perspective warp |
-| `vendor/` | Bundled OpenCV.js and libheif-js WASM decoder |
+| `vendor/` | Local fallback copies of OpenCV.js and the HEIC decoder |
 | `assets/` | Documentation screenshot |
 | `serve.sh` | Lightweight local HTTP server script |
 | `backup/` | Previous Python server implementation |
